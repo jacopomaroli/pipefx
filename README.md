@@ -38,11 +38,13 @@ kill -SIGUSR1 $PIPEFX_PID
 Note: Configuration reload works only for the fx chain.
 
 ## Limitations
-For now it just supports a compressor and a lowpass filter.
+For now it just supports a compressor and a lowpass filter.  
 Configuration reload works only for the fx chain.
 
 ## Thanks
 This code was an adapted and inspired from https://github.com/voice-engine/ec and https://github.com/cycfi/Q
+
+
 It was made to improve the user experience with https://rhasspy.readthedocs.io/en/latest/ and https://wiki.seeedstudio.com/ReSpeaker_6-Mic_Circular_Array_kit_for_Raspberry_Pi/
 
 ## Donations
