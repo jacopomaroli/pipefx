@@ -2,7 +2,7 @@
 This program allows you to apply a chain of effects to an input coming from a named pipe and output the result into another named pipe
 
 ## Installation
-This project relies on libq. We don't need to compile the whole thing as we just need a couple of headers.
+This project relies on https://github.com/cycfi/Q. We don't need to compile the whole thing; we'll just need a couple of headers:
 ```
 mkdir -p /usr/local/include/q
 sudo apt-get install libasound2-dev
@@ -11,7 +11,7 @@ cp Q/infra/include/infra /usr/local/include/q/
 cp Q/home/pi/Q/q_lib/include/q /usr/local/include/q/
 ```
 
-After that we can just clone compile this project with
+After that we can just clone and compile this project with
 ```
 git clone https://github.com/jacopomaroli/pipefx.git
 cd pipefx
@@ -42,7 +42,7 @@ For now it just supports a compressor and a lowpass filter.
 Configuration reload works only for the fx chain.
 
 ## Thanks
-This code was an adapted and inspired from https://github.com/voice-engine/ec
+This code was an adapted and inspired from https://github.com/voice-engine/ec and https://github.com/cycfi/Q
 It was made to improve the user experience with https://rhasspy.readthedocs.io/en/latest/ and https://wiki.seeedstudio.com/ReSpeaker_6-Mic_Circular_Array_kit_for_Raspberry_Pi/
 
 ## Donations
