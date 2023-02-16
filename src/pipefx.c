@@ -10,7 +10,6 @@
 #include <sys/stat.h>
 
 #include "conf.h"
-#include "audio.h"
 #include "fxs.h"
 
 #define CONFIG_SIZE (256)
@@ -91,6 +90,59 @@ void daemonize(void)
     }
 }
 
+void apply_fx_chain(int16_t *in, int16_t **out, int frame_size, unsigned n_channels, int16_t *fx_out1, int16_t *fx_out2)
+{
+    fx_chain_item_t *fx_chain_item = first_fx_chain_item;
+    int16_t *fx_in_ptr = in;
+    while (fx_chain_item)
+    {
+        if (fx_chain_item->type == t_soft_knee_compressor)
+        {
+            compressor(fx_in_ptr, fx_out1, frame_size, n_channels, fx_chain_item->data, fx_chain_item->context);
+        }
+        if (fx_chain_item->type == t_lowpass)
+        {
+            lowpass(fx_in_ptr, fx_out1, frame_size, n_channels, fx_chain_item->data, fx_chain_item->context);
+        }
+        if (fx_chain_item->type == t_to_mono)
+        {
+            to_mono(fx_in_ptr, fx_out1, frame_size, n_channels, fx_chain_item->data, fx_chain_item->context);
+        }
+
+        fx_chain_item = fx_chain_item->next;
+        fx_in_ptr = fx_out1;
+        fx_out1 = fx_out2;
+        fx_out2 = fx_in_ptr;
+    }
+    *out = fx_in_ptr;
+}
+
+void free_fx_chain()
+{
+    fx_chain_item_t *fx_chain_item = first_fx_chain_item;
+    while (fx_chain_item)
+    {
+        if (fx_chain_item->type == t_soft_knee_compressor)
+        {
+            compressor_free(fx_chain_item->data, fx_chain_item->context);
+        }
+        if (fx_chain_item->type == t_lowpass)
+        {
+            lowpass_free(fx_chain_item->data, fx_chain_item->context);
+        }
+        if (fx_chain_item->type == t_to_mono)
+        {
+            to_mono_free(fx_chain_item->data, fx_chain_item->context);
+        }
+        fx_chain_item_t *fx_chain_item_new = fx_chain_item->next;
+        free(fx_chain_item);
+        fx_chain_item = fx_chain_item_new;
+    }
+
+    first_fx_chain_item = NULL;
+    last_fx_chain_item = NULL;
+}
+
 int parse_config(char *buf, conf_t *config)
 {
     char dummy[CONFIG_SIZE];
@@ -98,13 +150,7 @@ int parse_config(char *buf, conf_t *config)
     if (sscanf(buf, " %s", dummy) == EOF)
         return 0; // blank line
     if (sscanf(buf, " %[#]", dummy) == 1)
-        return 0; // comment
-    if (sscanf(buf, " playback_fifo = %s", dummy_str) == 1)
-    {
-        config->playback_fifo = malloc((strlen(dummy_str) + 1) * sizeof(char));
-        strcpy(config->playback_fifo, dummy_str);
-        return 0;
-    }
+        return 0; // comment#
     if (sscanf(buf, " in_fifo = %s", dummy_str) == 1)
     {
         config->in_fifo = malloc((strlen(dummy_str) + 1) * sizeof(char));
@@ -115,6 +161,14 @@ int parse_config(char *buf, conf_t *config)
     {
         config->out_fifo = malloc((strlen(dummy_str) + 1) * sizeof(char));
         strcpy(config->out_fifo, dummy_str);
+        return 0;
+    }
+    if (sscanf(buf, " in_channels = %d", &config->in_channels) == 1)
+    {
+        return 0;
+    }
+    if (sscanf(buf, " out_channels = %d", &config->out_channels) == 1)
+    {
         return 0;
     }
     if (sscanf(buf, " rate = %u", &config->rate) == 1)
@@ -189,6 +243,32 @@ int parse_config(char *buf, conf_t *config)
                 free(lowpass_config);
             }
         }
+        if (sscanf(dummy_str, " to_mono:%s", dummy_str) == 1)
+        {
+            to_mono_config_t *to_mono_config = (to_mono_config_t *)malloc(sizeof(to_mono_config_t));
+            if (sscanf(dummy_str, "%u",
+                       &to_mono_config->dst_channel) == 1)
+            {
+                fx_chain_item_t *fx_chain_item = (fx_chain_item_t *)malloc(sizeof(fx_chain_item_t));
+                to_mono_context_t *to_mono_context = (to_mono_context_t *)malloc(sizeof(to_mono_context_t));
+                fx_chain_item->type = t_to_mono;
+                fx_chain_item->data = to_mono_config;
+                fx_chain_item->context = to_mono_context;
+                if (!first_fx_chain_item)
+                {
+                    first_fx_chain_item = fx_chain_item;
+                }
+                if (last_fx_chain_item)
+                {
+                    last_fx_chain_item->next = fx_chain_item;
+                }
+                last_fx_chain_item = fx_chain_item;
+            }
+            else
+            {
+                free(to_mono_config);
+            }
+        }
         return 0;
     }
     return 3; // syntax error
@@ -196,29 +276,7 @@ int parse_config(char *buf, conf_t *config)
 
 void print_config(conf_t *config)
 {
-    printf("playback_fifo=%s, rate=%u\n", config->playback_fifo, config->rate);
-}
-
-void free_fx_chain()
-{
-    fx_chain_item_t *fx_chain_item = first_fx_chain_item;
-    while (fx_chain_item)
-    {
-        if (fx_chain_item->type == t_soft_knee_compressor)
-        {
-            compressor_free(fx_chain_item->data, fx_chain_item->context);
-        }
-        if (fx_chain_item->type == t_lowpass)
-        {
-            lowpass_free(fx_chain_item->data, fx_chain_item->context);
-        }
-        fx_chain_item_t *fx_chain_item_new = fx_chain_item->next;
-        free(fx_chain_item);
-        fx_chain_item = fx_chain_item_new;
-    }
-
-    first_fx_chain_item = NULL;
-    last_fx_chain_item = NULL;
+    printf("in_fifo=%s, out_fifo=%s, rate=%u\n", config->in_fifo, config->out_fifo, config->rate);
 }
 
 void get_config(conf_t *config, char *config_file_path)
@@ -243,29 +301,23 @@ int main(int argc, char *argv[])
     int16_t *out = NULL;
     int16_t *fx_out1 = NULL;
     int16_t *fx_out2 = NULL;
+    // int16_t *in_single = NULL;
+    // int16_t *out_single = NULL;
     FILE *fp_in = NULL;
     FILE *fp_out = NULL;
 
     int opt = 0;
-    int delay = 0;
     int daemon = 0;
     char *config_file_path = 0;
 
     conf_t config = {
-        .rec_pcm = "default",
-        .out_pcm = "default",
-        .playback_fifo = "/tmp/pipefx.playback",
         .in_fifo = "/tmp/pipefx.input",
         .out_fifo = "/tmp/pipefx.output",
         .rate = 16000,
-        .rec_channels = 1,
-        .ref_channels = 1,
         .in_channels = 1,
         .out_channels = 1,
         .bits_per_sample = 16,
         .buffer_size = 1024 * 16,
-        .playback_fifo_size = 1024 * 4,
-        .filter_length = 4096,
         .bypass = 0,
         .save_audio = 0};
 
@@ -306,8 +358,8 @@ int main(int argc, char *argv[])
 
     if (config.save_audio)
     {
-        fp_in = fopen("/tmp/in.raw", "wb");
-        fp_out = fopen("/tmp/out.raw", "wb");
+        fp_in = fopen("/tmp/pipefx_in.raw", "wb");
+        fp_out = fopen("/tmp/pipefx_out.raw", "wb");
 
         if (fp_in == NULL || fp_out == NULL)
         {
@@ -316,9 +368,12 @@ int main(int argc, char *argv[])
         }
     }
 
-    in = (int16_t *)calloc(frame_size * config.ref_channels, sizeof(int16_t));
-    fx_out1 = (int16_t *)calloc(frame_size * config.out_channels, sizeof(int16_t));
-    fx_out2 = (int16_t *)calloc(frame_size * config.out_channels, sizeof(int16_t));
+    in = (int16_t *)calloc(frame_size * config.in_channels, sizeof(int16_t));
+    fx_out1 = (int16_t *)calloc(frame_size * config.in_channels, sizeof(int16_t));
+    fx_out2 = (int16_t *)calloc(frame_size * config.in_channels, sizeof(int16_t));
+    // out = (int16_t *)calloc(frame_size * config.out_channels, sizeof(int16_t));
+    // in_single = (int16_t *)calloc(frame_size, sizeof(int16_t));
+    // out_single = (int16_t *)calloc(frame_size, sizeof(int16_t));
 
     if (in == NULL || fx_out1 == NULL || fx_out2 == NULL)
     {
@@ -346,9 +401,6 @@ int main(int argc, char *argv[])
 
     int timeout = 200 * 1000 * frame_size / config.rate; // ms
 
-    // system delay between recording and playback
-    printf("skip frames %d\n", capture_skip(delay));
-
     while (!g_is_quit)
     {
         if (g_is_reloading_config)
@@ -361,34 +413,37 @@ int main(int argc, char *argv[])
 
         if (!config.bypass)
         {
-            fx_chain_item_t *fx_chain_item = first_fx_chain_item;
-            int16_t *fx_in_ptr = in;
-            while (fx_chain_item)
-            {
-                if (fx_chain_item->type == t_soft_knee_compressor)
-                {
-                    compressor(fx_in_ptr, fx_out1, frame_size, config.out_channels, fx_chain_item->data, fx_chain_item->context);
-                }
-                if (fx_chain_item->type == t_lowpass)
-                {
-                    lowpass(fx_in_ptr, fx_out1, frame_size, config.out_channels, fx_chain_item->data, fx_chain_item->context);
-                }
-                fx_chain_item = fx_chain_item->next;
+            // for (int out_channel = 0; out_channel < config.out_channels; out_channel++)
+            // {
+            //     for (int i = 0; i < frame_size; i++)
+            //     {
+            //         in_single[i] = in[config.out_channels * i + out_channel];
+            //     }
+            //     apply_fx_chain(in_single, &out_single, frame_size, config.out_channels, fx_out1, fx_out2);
+            //     for (int i = 0; i < frame_size; i++)
+            //     {
+            //         out[config.out_channels * i + out_channel] = out_single[i];
+            //     }
+            // }
+            apply_fx_chain(in, &out, frame_size, config.in_channels, fx_out1, fx_out2);
 
-                fx_in_ptr = fx_out1;
-                fx_out1 = fx_out2;
-                fx_out2 = fx_in_ptr;
-            }
-            out = fx_in_ptr;
+            // for (int in_channel = 0; in_channel < config.out_channels; in_channel++)
+            // {
+            //     for (int i = 0; i < frame_size; i++)
+            //     {
+            //         out[i] = out_fx[config.in_channels * i + in_channel];
+            //     }
+            // }
         }
         else
         {
-            memcpy(out, in, frame_size * config.ref_channels * config.bits_per_sample / 8);
+            out = fx_out1;
+            memcpy(out, in, frame_size * config.in_channels * config.bits_per_sample / 8);
         }
 
         if (fp_in)
         {
-            fwrite(in, 2, frame_size, fp_in);
+            fwrite(in, 2, frame_size * config.in_channels, fp_in);
             fwrite(out, 2, frame_size * config.out_channels, fp_out);
         }
 
@@ -397,13 +452,19 @@ int main(int argc, char *argv[])
 
     if (fp_in)
     {
+        fflush(fp_in);
+        fflush(fp_out);
         fclose(fp_in);
         fclose(fp_out);
     }
 
     free(in);
+    // free(out);
     free(fx_out1);
     free(fx_out2);
+    // free(in_single);
+    // free(out_single);
+
     free_fx_chain();
 
     printf("main terminated\n");

@@ -87,7 +87,7 @@ void *fifo_read_thread(void *ptr)
     ring_buffer_size_t size1, size2, available;
     void *data1, *data2;
 
-    frame_bytes = conf->ref_channels * 2;
+    frame_bytes = conf->in_channels * 2;
     chunk_bytes = chunk_size * frame_bytes;
     chunk = (char *)malloc(chunk_bytes);
     if (chunk == NULL)
@@ -130,6 +130,7 @@ void *fifo_read_thread(void *ptr)
     // sigaction(SIGUSR1, &sig_usr1_handler, NULL);
 
     // clear
+    // fsync(fd);
     PaUtil_AdvanceRingBufferWriteIndex(&g_in_ringbuffer, PaUtil_GetRingBufferWriteAvailable(&g_in_ringbuffer));
     while (!g_is_quit)
     {

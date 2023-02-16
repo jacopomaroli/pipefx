@@ -21,6 +21,19 @@ float clip_mul(float a, float b)
     return x;
 }
 
+int16_t clip_add(int16_t a, int16_t b)
+{
+    if (b > 0 && a > INT16_MAX - b)
+    {
+        return INT16_MAX;
+    }
+    if (b < 0 && a < INT16_MIN - b)
+    {
+        return INT16_MIN;
+    }
+    return a + b;
+}
+
 float clip_float_to_int16(float a)
 {
     if (a > INT16_MAX)
@@ -73,22 +86,32 @@ compressor(int16_t *in, int16_t *out, int size, unsigned n_channels, void *confi
         soft_knee_compressor_config->ratio};
     auto makeup_gain = soft_knee_compressor_config->makeup_gain;
 
-    q::peak_envelope_follower *env = (q::peak_envelope_follower *)soft_knee_compressor_context->env;
-    if (!env)
+    q::peak_envelope_follower *envs = static_cast<q::peak_envelope_follower *>(soft_knee_compressor_context->env);
+    if (!envs)
     {
-        env = new q::peak_envelope_follower(10_ms, 16000);
-        soft_knee_compressor_context->env = (void *)env;
+        // placement-new
+        size_t size = sizeof(q::peak_envelope_follower);
+        void *raw_memory = operator new[](n_channels * sizeof(q::peak_envelope_follower));
+        envs = static_cast<q::peak_envelope_follower *>(raw_memory);
+        for (int i = 0; i < n_channels; i++)
+        {
+            new (&envs[i]) q::peak_envelope_follower(10_ms, 16000);
+        }
+        soft_knee_compressor_context->env = (void *)envs;
+        soft_knee_compressor_context->n_channels = n_channels;
     }
 
-    for (auto i = 0; i != size; ++i)
+    for (int channel = 0; channel < n_channels; channel++)
     {
-        auto pos = i * n_channels;
-        auto ch1 = pos;
-        auto s = int16_to_bipNorm(in[i], INT16_TO_BIPNORM_SLOPE);
-        auto env_out = q::decibel((*env)(std::abs(s)));
-        auto gain = as_float(comp(env_out)) * makeup_gain;
-        auto res = s * gain;
-        out[ch1] = bipNorm_to_int16(res, BIPNORM_TO_INT16_SLOPE);
+        for (auto i = 0; i != size; ++i)
+        {
+            auto pos = n_channels * i + channel;
+            auto s = int16_to_bipNorm(in[pos], INT16_TO_BIPNORM_SLOPE);
+            auto env_out = q::decibel(envs[channel](std::abs(s)));
+            auto gain = as_float(comp(env_out)) * makeup_gain;
+            auto res = s * gain;
+            out[pos] = bipNorm_to_int16(res, BIPNORM_TO_INT16_SLOPE);
+        }
     }
 }
 
@@ -102,9 +125,15 @@ compressor_free(void *config_data, void *context)
     // free context
     soft_knee_compressor_context_t *soft_knee_compressor_context = (soft_knee_compressor_context_t *)context;
 
-    if (q::peak_envelope_follower *env = (q::peak_envelope_follower *)soft_knee_compressor_context->env)
+    unsigned n_channels = soft_knee_compressor_context->n_channels;
+
+    if (q::peak_envelope_follower *envs = static_cast<q::peak_envelope_follower *>(soft_knee_compressor_context->env))
     {
-        delete env;
+        for (int i = n_channels - 1; i >= 0; --i)
+        {
+            envs[i].~peak_envelope_follower();
+        }
+        operator delete[](envs);
     }
 
     free(soft_knee_compressor_context);
@@ -120,13 +149,15 @@ lowpass(int16_t *in, int16_t *out, int size, unsigned n_channels, void *config_d
         lowpass_config->sps,
         lowpass_config->q};
 
-    for (auto i = 0; i != size; ++i)
+    for (int channel = 0; channel < n_channels; channel++)
     {
-        auto pos = i * n_channels;
-        auto ch1 = pos;
-        auto s = int16_to_bipNorm(in[i], INT16_TO_BIPNORM_SLOPE);
-        auto res = lp1(s);
-        out[ch1] = bipNorm_to_int16(res, BIPNORM_TO_INT16_SLOPE);
+        for (auto i = 0; i != size; ++i)
+        {
+            auto pos = n_channels * i + channel;
+            auto s = int16_to_bipNorm(in[pos], INT16_TO_BIPNORM_SLOPE);
+            auto res = lp1(s);
+            out[pos] = bipNorm_to_int16(res, BIPNORM_TO_INT16_SLOPE);
+        }
     }
 }
 
@@ -140,4 +171,35 @@ lowpass_free(void *config_data, void *context)
     // free context
     lowpass_context_t *lowpass_context = (lowpass_context_t *)context;
     free(lowpass_context);
+}
+
+extern "C" void
+to_mono(int16_t *in, int16_t *out, int size, unsigned n_channels, void *config_data, void *context)
+{
+    // to_mono_config_t *to_mono_config = (to_mono_config_t *)config_data;
+    // to_mono_context_t *to_mono_context = (to_mono_context_t *)context;
+
+    unsigned dst_channel = 0;
+
+    for (auto i = 0; i != size; ++i)
+    {
+        out[i] = 0;
+        for (int channel = 0; channel < n_channels; channel++)
+        {
+            auto pos = n_channels * i + channel;
+            out[i] = clip_add(out[i], in[pos]);
+        }
+    }
+}
+
+extern "C" void
+to_mono_free(void *config_data, void *context)
+{
+    // free config
+    to_mono_config_t *to_mono_config = (to_mono_config_t *)config_data;
+    free(to_mono_config);
+
+    // free context
+    to_mono_context_t *to_mono_context = (to_mono_context_t *)context;
+    free(to_mono_context);
 }

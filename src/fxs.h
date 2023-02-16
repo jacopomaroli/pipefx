@@ -3,7 +3,8 @@
 typedef enum _fx_type
 {
     t_soft_knee_compressor,
-    t_lowpass
+    t_lowpass,
+    t_to_mono
 } fx_type;
 
 typedef struct fx_chain_item_t fx_chain_item_t;
@@ -27,6 +28,7 @@ typedef struct _soft_knee_compressor_config_t
 typedef struct _soft_knee_compressor_context_t
 {
     void *env;
+    unsigned n_channels;
 } soft_knee_compressor_context_t;
 
 typedef struct _lowpass_config_t
@@ -39,6 +41,15 @@ typedef struct _lowpass_config_t
 typedef struct _lowpass_context_t
 {
 } lowpass_context_t;
+
+typedef struct _to_mono_config_t
+{
+    unsigned dst_channel;
+} to_mono_config_t;
+
+typedef struct _to_mono_context_t
+{
+} to_mono_context_t;
 
 #ifdef __cplusplus
 extern "C"
@@ -63,3 +74,15 @@ extern "C"
 #endif
     void
     lowpass_free(void *config_data, void *context);
+
+#ifdef __cplusplus
+extern "C"
+#endif
+    void
+    to_mono(int16_t *in, int16_t *out, int size, unsigned n_channels, void *config_data, void *context);
+
+#ifdef __cplusplus
+extern "C"
+#endif
+    void
+    to_mono_free(void *config_data, void *context);
