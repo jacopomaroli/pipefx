@@ -8,10 +8,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <errno.h>
 
 #include "pa_ringbuffer.h"
 #include "conf.h"
 #include "util.h"
+
+// #define FIXED_FIFO_READ
+#define ORIG_FIFO_READ
 
 extern int g_is_quit;
 
@@ -31,11 +35,11 @@ void *fifo_write_thread(void *ptr)
     }
 
     // ignore SIGPIPE
-    struct sigaction sig_pipe_handler;
-    sig_pipe_handler.sa_handler = SIG_IGN;
-    sigemptyset(&sig_pipe_handler.sa_mask);
-    sig_pipe_handler.sa_flags = 0;
-    sigaction(SIGPIPE, &sig_pipe_handler, NULL);
+    // struct sigaction sig_pipe_handler;
+    // sig_pipe_handler.sa_handler = SIG_IGN;
+    // sigemptyset(&sig_pipe_handler.sa_mask);
+    // sig_pipe_handler.sa_flags = 0;
+    // sigaction(SIGPIPE, &sig_pipe_handler, NULL);
 
     // ignore SIGUSR1
     // struct sigaction sig_usr1_handler;
@@ -84,8 +88,10 @@ void *fifo_read_thread(void *ptr)
     unsigned chunk_size = 1024;
 
     conf_t *conf = (conf_t *)ptr;
+#ifdef FIXED_FIFO_READ
     ring_buffer_size_t size1, size2, available;
     void *data1, *data2;
+#endif
 
     frame_bytes = conf->in_channels * 2;
     chunk_bytes = chunk_size * frame_bytes;
@@ -122,13 +128,7 @@ void *fifo_read_thread(void *ptr)
     }
     printf("new pipe size: %ld\n", pipe_size);
 
-    // ignore SIGUSR1
-    // struct sigaction sig_usr1_handler;
-    // sig_usr1_handler.sa_handler = SIG_IGN;
-    // sigemptyset(&sig_usr1_handler.sa_mask);
-    // sig_usr1_handler.sa_flags = 0;
-    // sigaction(SIGUSR1, &sig_usr1_handler, NULL);
-
+#ifdef FIXED_FIFO_READ
     // clear
     // fsync(fd);
     PaUtil_AdvanceRingBufferWriteIndex(&g_in_ringbuffer, PaUtil_GetRingBufferWriteAvailable(&g_in_ringbuffer));
@@ -154,6 +154,85 @@ void *fifo_read_thread(void *ptr)
             usleep(100000);
         }
     }
+#endif
+
+#ifdef ORIG_FIFO_READ
+    int wait_us = chunk_size * 1000000 / conf->rate / 4;
+    while (!g_is_quit)
+    {
+        int count = 0;
+
+        /* for (int i = 0; i < 2; i++)
+        {
+            int result = read(fd, chunk + count, chunk_bytes - count);
+            if (result < 0)
+            {
+                if (errno != EAGAIN)
+                {
+                    fprintf(stderr, "read() returned %d, errno = %d\n", result, errno);
+                    exit(1);
+                }
+            }
+            else
+            {
+                count += result;
+            }
+
+            if (count >= chunk_bytes)
+            {
+                break;
+            }
+
+            usleep(wait_us);
+        }
+
+        if (count < chunk_bytes)
+        {
+            memset(chunk + count, 0, chunk_bytes - count);
+
+            if (count)
+            {
+                printf("playback filled %d bytes zero\n", chunk_bytes - count);
+            }
+        } */
+
+        while (count < chunk_bytes)
+        {
+            int result = read(fd, chunk + count, chunk_bytes - count);
+            if (result < 0)
+            {
+                if (errno != EAGAIN)
+                {
+                    fprintf(stderr, "read() returned %d, errno = %d\n", result, errno);
+                    exit(1);
+                }
+            }
+            else
+            {
+                count += result;
+            }
+
+            if (count >= chunk_bytes)
+            {
+                break;
+            }
+
+            usleep(wait_us);
+        }
+
+        count = chunk_size;
+        char *data = (char *)chunk;
+        ssize_t r = count;
+        while (count > 0 && !g_is_quit)
+        {
+            r = PaUtil_WriteRingBuffer(&g_in_ringbuffer, data, r);
+            count -= r;
+            data += r * frame_bytes;
+        }
+    }
+
+    free(chunk);
+#endif
 
     printf("fifo_read_thread terminated\n");
 
