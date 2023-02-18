@@ -84,13 +84,12 @@ compressor(int16_t *in, int16_t *out, int size, unsigned n_channels, void *confi
         q::decibel{soft_knee_compressor_config->threshold, q::decibel::direct},
         q::decibel{soft_knee_compressor_config->width, q::decibel::direct},
         soft_knee_compressor_config->ratio};
-    auto makeup_gain = soft_knee_compressor_config->makeup_gain;
+    auto makeup_gain = as_float(q::decibel{soft_knee_compressor_config->makeup_gain, q::decibel::direct});
 
     q::peak_envelope_follower *envs = static_cast<q::peak_envelope_follower *>(soft_knee_compressor_context->env);
     if (!envs)
     {
         // placement-new
-        size_t size = sizeof(q::peak_envelope_follower);
         void *raw_memory = operator new[](n_channels * sizeof(q::peak_envelope_follower));
         envs = static_cast<q::peak_envelope_follower *>(raw_memory);
         for (int i = 0; i < n_channels; i++)
