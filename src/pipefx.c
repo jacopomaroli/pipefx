@@ -96,19 +96,7 @@ void apply_fx_chain(int16_t *in, int16_t **out, int frame_size, unsigned n_chann
     int16_t *fx_in_ptr = in;
     while (fx_chain_item)
     {
-        if (fx_chain_item->type == t_soft_knee_compressor)
-        {
-            compressor(fx_in_ptr, fx_out1, frame_size, n_channels, fx_chain_item->data, fx_chain_item->context);
-        }
-        if (fx_chain_item->type == t_lowpass)
-        {
-            lowpass(fx_in_ptr, fx_out1, frame_size, n_channels, fx_chain_item->data, fx_chain_item->context);
-        }
-        if (fx_chain_item->type == t_to_mono)
-        {
-            to_mono(fx_in_ptr, fx_out1, frame_size, n_channels, fx_chain_item->data, fx_chain_item->context);
-        }
-
+        fxs[fx_chain_item->type](fx_in_ptr, fx_out1, frame_size, n_channels, fx_chain_item->data, fx_chain_item->context);
         fx_chain_item = fx_chain_item->next;
         fx_in_ptr = fx_out1;
         fx_out1 = fx_out2;
@@ -122,18 +110,7 @@ void free_fx_chain()
     fx_chain_item_t *fx_chain_item = first_fx_chain_item;
     while (fx_chain_item)
     {
-        if (fx_chain_item->type == t_soft_knee_compressor)
-        {
-            compressor_free(fx_chain_item->data, fx_chain_item->context);
-        }
-        if (fx_chain_item->type == t_lowpass)
-        {
-            lowpass_free(fx_chain_item->data, fx_chain_item->context);
-        }
-        if (fx_chain_item->type == t_to_mono)
-        {
-            to_mono_free(fx_chain_item->data, fx_chain_item->context);
-        }
+        fxs_free[fx_chain_item->type](fx_chain_item->data, fx_chain_item->context);
         fx_chain_item_t *fx_chain_item_new = fx_chain_item->next;
         free(fx_chain_item);
         fx_chain_item = fx_chain_item_new;
@@ -141,6 +118,20 @@ void free_fx_chain()
 
     first_fx_chain_item = NULL;
     last_fx_chain_item = NULL;
+}
+
+void update_fx_chain(fx_chain_item_t *fx_chain_item)
+{
+    fx_chain_item->next = NULL;
+    if (!first_fx_chain_item)
+    {
+        first_fx_chain_item = fx_chain_item;
+    }
+    if (last_fx_chain_item)
+    {
+        last_fx_chain_item->next = fx_chain_item;
+    }
+    last_fx_chain_item = fx_chain_item;
 }
 
 int parse_config(char *buf, conf_t *config)
@@ -188,11 +179,12 @@ int parse_config(char *buf, conf_t *config)
         if (sscanf(dummy_str, " soft_knee_compressor:%s", dummy_str) == 1)
         {
             soft_knee_compressor_config_t *soft_knee_compressor_config = (soft_knee_compressor_config_t *)malloc(sizeof(soft_knee_compressor_config_t));
-            if (sscanf(dummy_str, "%lf,%lf,%f,%f",
+            if (sscanf(dummy_str, "%lf,%lf,%f,%f,%lf",
                        &soft_knee_compressor_config->threshold,
                        &soft_knee_compressor_config->width,
                        &soft_knee_compressor_config->ratio,
-                       &soft_knee_compressor_config->makeup_gain) == 4)
+                       &soft_knee_compressor_config->makeup_gain,
+                       &soft_knee_compressor_config->env_release_ms) == 5)
             {
                 fx_chain_item_t *fx_chain_item = (fx_chain_item_t *)malloc(sizeof(fx_chain_item_t));
                 soft_knee_compressor_context_t *soft_knee_compressor_context = (soft_knee_compressor_context_t *)malloc(sizeof(soft_knee_compressor_context_t));
@@ -200,19 +192,35 @@ int parse_config(char *buf, conf_t *config)
                 fx_chain_item->type = t_soft_knee_compressor;
                 fx_chain_item->data = soft_knee_compressor_config;
                 fx_chain_item->context = soft_knee_compressor_context;
-                if (!first_fx_chain_item)
-                {
-                    first_fx_chain_item = fx_chain_item;
-                }
-                if (last_fx_chain_item)
-                {
-                    last_fx_chain_item->next = fx_chain_item;
-                }
-                last_fx_chain_item = fx_chain_item;
+                update_fx_chain(fx_chain_item);
             }
             else
             {
                 free(soft_knee_compressor_config);
+            }
+        }
+        if (sscanf(dummy_str, " noise_gate:%s", dummy_str) == 1)
+        {
+            noise_gate_config_t *noise_gate_config = (noise_gate_config_t *)malloc(sizeof(noise_gate_config_t));
+            if (sscanf(dummy_str, "%lf,%lf,%u,%lf,%lf",
+                       &noise_gate_config->onset_threshold,
+                       &noise_gate_config->release_threshold,
+                       &noise_gate_config->attack_window,
+                       &noise_gate_config->env_release_ms,
+                       &noise_gate_config->gate_env_release_ms) == 5)
+            {
+                fx_chain_item_t *fx_chain_item = (fx_chain_item_t *)malloc(sizeof(fx_chain_item_t));
+                noise_gate_context_t *noise_gate_context = (noise_gate_context_t *)malloc(sizeof(noise_gate_context_t));
+                noise_gate_context->env = NULL;
+                noise_gate_context->gate_env = NULL;
+                fx_chain_item->type = t_noise_gate;
+                fx_chain_item->data = noise_gate_config;
+                fx_chain_item->context = noise_gate_context;
+                update_fx_chain(fx_chain_item);
+            }
+            else
+            {
+                free(noise_gate_config);
             }
         }
         if (sscanf(dummy_str, " lowpass:%s", dummy_str) == 1)
@@ -228,15 +236,7 @@ int parse_config(char *buf, conf_t *config)
                 fx_chain_item->type = t_lowpass;
                 fx_chain_item->data = lowpass_config;
                 fx_chain_item->context = lowpass_context;
-                if (!first_fx_chain_item)
-                {
-                    first_fx_chain_item = fx_chain_item;
-                }
-                if (last_fx_chain_item)
-                {
-                    last_fx_chain_item->next = fx_chain_item;
-                }
-                last_fx_chain_item = fx_chain_item;
+                update_fx_chain(fx_chain_item);
             }
             else
             {
@@ -254,15 +254,7 @@ int parse_config(char *buf, conf_t *config)
                 fx_chain_item->type = t_to_mono;
                 fx_chain_item->data = to_mono_config;
                 fx_chain_item->context = to_mono_context;
-                if (!first_fx_chain_item)
-                {
-                    first_fx_chain_item = fx_chain_item;
-                }
-                if (last_fx_chain_item)
-                {
-                    last_fx_chain_item->next = fx_chain_item;
-                }
-                last_fx_chain_item = fx_chain_item;
+                update_fx_chain(fx_chain_item);
             }
             else
             {

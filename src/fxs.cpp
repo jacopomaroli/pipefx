@@ -5,8 +5,25 @@
 #include <q/fx/envelope.hpp>
 #include <q/fx/dynamic.hpp>
 #include <q/fx/biquad.hpp>
+#include <q/fx/noise_gate.hpp>
 #include <limits.h>
 #include <math.h>
+
+// WARNING: items needs to be in the same order of fx_type
+fx_fn fxs[] = {
+    compressor,
+    noise_gate,
+    lowpass,
+    to_mono
+};
+
+// WARNING: items needs to be in the same order of fx_type
+fx_free_fn fxs_free[] = {
+    compressor_free,
+    noise_gate_free,
+    lowpass_free,
+    to_mono_free
+};
 
 namespace q = cycfi::q;
 using namespace q::literals;
@@ -85,6 +102,7 @@ compressor(int16_t *in, int16_t *out, int size, unsigned n_channels, void *confi
         q::decibel{soft_knee_compressor_config->width, q::decibel::direct},
         soft_knee_compressor_config->ratio};
     auto makeup_gain = as_float(q::decibel{soft_knee_compressor_config->makeup_gain, q::decibel::direct});
+    auto env_release = q::duration{ double(soft_knee_compressor_config->env_release_ms * 1e-3) };
 
     q::peak_envelope_follower *envs = static_cast<q::peak_envelope_follower *>(soft_knee_compressor_context->env);
     if (!envs)
@@ -94,7 +112,7 @@ compressor(int16_t *in, int16_t *out, int size, unsigned n_channels, void *confi
         envs = static_cast<q::peak_envelope_follower *>(raw_memory);
         for (int i = 0; i < n_channels; i++)
         {
-            new (&envs[i]) q::peak_envelope_follower(10_ms, 16000);
+            new (&envs[i]) q::peak_envelope_follower(env_release, 16000);
         }
         soft_knee_compressor_context->env = (void *)envs;
         soft_knee_compressor_context->n_channels = n_channels;
@@ -106,8 +124,8 @@ compressor(int16_t *in, int16_t *out, int size, unsigned n_channels, void *confi
         {
             auto pos = n_channels * i + channel;
             auto s = int16_to_bipNorm(in[pos], INT16_TO_BIPNORM_SLOPE);
-            auto env_out = q::decibel(envs[channel](std::abs(s)));
-            auto gain = as_float(comp(env_out)) * makeup_gain;
+            auto env = q::decibel(envs[channel](std::abs(s)));
+            auto gain = as_float(comp(env)) * makeup_gain;
             auto res = s * gain;
             out[pos] = bipNorm_to_int16(res, BIPNORM_TO_INT16_SLOPE);
         }
@@ -136,6 +154,79 @@ compressor_free(void *config_data, void *context)
     }
 
     free(soft_knee_compressor_context);
+}
+
+extern "C" void
+noise_gate(int16_t * in, int16_t * out, int size, unsigned n_channels, void* config_data, void* context)
+{
+    noise_gate_config_t* noise_gate_config = (noise_gate_config_t*)config_data;
+    noise_gate_context_t* noise_gate_context = (noise_gate_context_t*)context;
+
+    auto gate = q::basic_noise_gate<10>{
+        q::decibel{noise_gate_config->onset_threshold, q::decibel::direct},
+        q::decibel{noise_gate_config->release_threshold, q::decibel::direct} };
+    auto env_release = q::duration{ double(noise_gate_config->env_release_ms * 1e-3) };
+    auto gate_env_release = q::duration{ double(noise_gate_config->gate_env_release_ms * 1e-3) };
+
+    q::peak_envelope_follower* envs = static_cast<q::peak_envelope_follower*>(noise_gate_context->env);
+    q::peak_envelope_follower* gate_envs = static_cast<q::peak_envelope_follower*>(noise_gate_context->gate_env);
+    if (!envs)
+    {
+        // placement-new
+        void* raw_memory_env = operator new[](n_channels * sizeof(q::peak_envelope_follower));
+        void* raw_memory_gate_env = operator new[](n_channels * sizeof(q::peak_envelope_follower));
+        envs = static_cast<q::peak_envelope_follower*>(raw_memory_env);
+        gate_envs = static_cast<q::peak_envelope_follower*>(raw_memory_gate_env);
+        for (int i = 0; i < n_channels; i++)
+        {
+            new (&envs[i]) q::peak_envelope_follower(env_release, 16000);
+            new (&gate_envs[i]) q::peak_envelope_follower(gate_env_release, 16000);
+        }
+        noise_gate_context->env = (void*)envs;
+        noise_gate_context->gate_env = (void*)gate_envs;
+        noise_gate_context->n_channels = n_channels;
+    }
+
+    for (int channel = 0; channel < n_channels; channel++)
+    {
+        for (auto i = 0; i != size; ++i)
+        {
+            auto pos = n_channels * i + channel;
+            auto s = int16_to_bipNorm(in[pos], INT16_TO_BIPNORM_SLOPE);
+            auto env = envs[channel](std::abs(s));
+            auto gate_val = gate(env);
+            auto gate_env = gate_envs[channel](gate_val);
+            auto res = s * gate_env;
+            out[pos] = bipNorm_to_int16(res, BIPNORM_TO_INT16_SLOPE);
+        }
+    }
+}
+
+extern "C" void
+noise_gate_free(void* config_data, void* context)
+{
+    // free config
+    noise_gate_config_t* noise_gate_config = (noise_gate_config_t*)config_data;
+    free(noise_gate_config);
+
+    // free context
+    noise_gate_context_t* noise_gate_context = (noise_gate_context_t*)context;
+
+    unsigned n_channels = noise_gate_context->n_channels;
+
+    q::peak_envelope_follower* envs = static_cast<q::peak_envelope_follower*>(noise_gate_context->env);
+    q::peak_envelope_follower* gate_envs = static_cast<q::peak_envelope_follower*>(noise_gate_context->gate_env);
+    if (envs && gate_envs)
+    {
+        for (int i = n_channels - 1; i >= 0; --i)
+        {
+            envs[i].~peak_envelope_follower();
+            gate_envs[i].~peak_envelope_follower();
+        }
+        operator delete[](envs);
+    }
+
+    free(noise_gate_context);
 }
 
 extern "C" void
