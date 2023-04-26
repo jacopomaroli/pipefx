@@ -11,16 +11,6 @@ typedef enum _fx_type
     t_to_mono
 } fx_type;
 
-typedef struct fx_chain_item_t fx_chain_item_t;
-
-struct fx_chain_item_t
-{
-    unsigned type;
-    void *data;
-    void *context;
-    fx_chain_item_t *next;
-};
-
 typedef struct _soft_knee_compressor_config_t
 {
     double threshold;
@@ -124,10 +114,22 @@ extern "C"
 
 typedef void (*fx_fn)(int16_t* in, int16_t* out, int size, unsigned n_channels, void* config_data, void* context);
 
-extern fx_fn fxs[];
+// WARNING: items needs to be in the same order of fx_type
+static fx_fn fxs[] = {
+    compressor,
+    noise_gate,
+    lowpass,
+    to_mono
+};
 
 typedef void (*fx_free_fn)(void* config_data, void* context);
 
-extern fx_free_fn fxs_free[];
+// WARNING: items needs to be in the same order of fx_type
+static fx_free_fn fxs_free[] = {
+    compressor_free,
+    noise_gate_free,
+    lowpass_free,
+    to_mono_free
+};
 
 #endif /* __FXS_H__ */

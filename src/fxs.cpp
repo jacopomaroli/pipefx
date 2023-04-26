@@ -9,22 +9,6 @@
 #include <limits.h>
 #include <math.h>
 
-// WARNING: items needs to be in the same order of fx_type
-fx_fn fxs[] = {
-    compressor,
-    noise_gate,
-    lowpass,
-    to_mono
-};
-
-// WARNING: items needs to be in the same order of fx_type
-fx_free_fn fxs_free[] = {
-    compressor_free,
-    noise_gate_free,
-    lowpass_free,
-    to_mono_free
-};
-
 namespace q = cycfi::q;
 using namespace q::literals;
 
